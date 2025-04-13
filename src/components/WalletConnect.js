@@ -16,6 +16,7 @@ export default function WalletConnect() {
           const accounts = await window.ethereum.request({ method: 'eth_accounts' });
           if (accounts.length > 0) {
             setAccount(accounts[0]);
+            localStorage.setItem('bmail_user_address', accounts[0]);
           }
         } catch (err) {
           console.error('Error checking wallet connection:', err);
@@ -30,8 +31,10 @@ export default function WalletConnect() {
       window.ethereum.on('accountsChanged', (accounts) => {
         if (accounts.length > 0) {
           setAccount(accounts[0]);
+          localStorage.setItem('bmail_user_address', accounts[0]);
         } else {
           setAccount('');
+          localStorage.removeItem('bmail_user_address');
         }
       });
     }
@@ -45,6 +48,7 @@ export default function WalletConnect() {
       // This will show MetaMask account selection modal
       const connectedAccount = await connectWallet();
       setAccount(connectedAccount);
+      localStorage.setItem('bmail_user_address', connectedAccount);
     } catch (err) {
       console.error('Connection error:', err);
       setError('Failed to connect wallet. ' + err.message);
@@ -55,6 +59,7 @@ export default function WalletConnect() {
 
   const handleDisconnect = async () => {
     setAccount('');
+    localStorage.removeItem('bmail_user_address');
     // There's no actual "disconnect" method in MetaMask, 
     // so we just clear our local state
   };
@@ -67,6 +72,7 @@ export default function WalletConnect() {
       // This will force the account selection modal
       const connectedAccount = await connectWallet();
       setAccount(connectedAccount);
+      localStorage.setItem('bmail_user_address', connectedAccount);
     } catch (err) {
       console.error('Account switch error:', err);
       setError('Failed to switch account. ' + err.message);

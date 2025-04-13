@@ -5,17 +5,76 @@ const EmailStorageABI = [
   "function sendEmail(address recipient, string ipfsHash) public returns (uint256)",
   "function getEmail(uint256 emailId) public view returns (address sender, address recipient, string ipfsHash, uint256 timestamp, bool isRead, bool isStarred, bool isDraft)",
   "function getUserEmails(address user) public view returns (uint256[])",
-  "function markAsRead(uint256 emailId) public",
-  "function toggleStar(uint256 emailId) public",
-  "function saveAsDraft(address recipient, string ipfsHash) public returns (uint256)",
-  "function updateDraft(uint256 emailId, string ipfsHash) public",
-  "function deleteDraft(uint256 emailId) public",
-  "event EmailSent(uint256 indexed emailId, address indexed sender, address indexed recipient, string ipfsHash, uint256 timestamp)",
-  "event EmailRead(uint256 indexed emailId)",
-  "event EmailStarred(uint256 indexed emailId, bool starred)",
-  "event DraftSaved(uint256 indexed emailId, address indexed sender, address indexed recipient, string ipfsHash, uint256 timestamp)",
-  "event DraftUpdated(uint256 indexed emailId, string ipfsHash)",
-  "event DraftDeleted(uint256 indexed emailId)"
+  "function updateEmailStatus(uint256 emailId, bool isRead, bool isStarred, bool isDraft) public",
+  "function saveDraft(address recipient, string ipfsHash) public returns (uint256)",
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "emailId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "sender",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "recipient",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "ipfsHash",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      }
+    ],
+    "name": "EmailSent",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "emailId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "isRead",
+        "type": "bool"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "isStarred",
+        "type": "bool"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "isDraft",
+        "type": "bool"
+      }
+    ],
+    "name": "EmailStatusUpdated",
+    "type": "event"
+  }
 ];
 
 // Contract address - replace with your deployed contract address

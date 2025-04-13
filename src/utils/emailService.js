@@ -1,103 +1,108 @@
 import { getContract } from './web3Config';
-import { encryptContent, uploadToIPFS, getFromIPFS } from './ipfsService';
-import { decryptMessage as decryptWithPrivateKey, getPrivateKey, getPublicKey } from './cryptoUtils';
+import { uploadToIPFS, getFromIPFS } from './ipfsService';
 import { ethers } from 'ethers';
 
-// Send an email - browser-friendly implementation
-export const sendEmail = async (recipientEmail, emailContent) => {
+// Send email
+export const sendEmail = async (recipientEmail, subject, content) => {
   try {
-    // 0. Get recipient's public key and address
-    const recipientPublicKey = await getPublicKey(recipientEmail);
-    
-    if (!recipientPublicKey) {
-      throw new Error(`Recipient ${recipientEmail} public key not found`);
+    // Upload content to IPFS (plain data, no encryption)
+    const ipfsResult = await uploadToIPFS({
+      subject,
+      content,
+      timestamp: Date.now()
+    });
+
+    if (!ipfsResult || !ipfsResult.success) {
+      throw new Error(`Failed to upload to IPFS: ${ipfsResult?.error || 'Unknown error'}`);
     }
-    
-    // Get recipient's Ethereum address from the API
-    const response = await fetch(`/api/users/ethAddress?email=${encodeURIComponent(recipientEmail)}`);
-    
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || `Failed to retrieve recipient data for ${recipientEmail}`);
-    }
-    
-    const data = await response.json();
-    
-    if (!data || !data.ethAddress) {
-      throw new Error(`Recipient ${recipientEmail} wallet address not found`);
-    }
-    
-    const recipientAddress = data.ethAddress;
-    
-    // 1. Encrypt the email content with recipient's public key
-    const { encryptedContent, encryptionKey } = await encryptContent(emailContent, recipientPublicKey);
-    
-    // 2. Upload to IPFS and get hash
-    const ipfsResult = await uploadToIPFS(encryptedContent, encryptionKey);
-    
-    if (!ipfsResult.success) {
-      throw new Error(`Failed to upload to IPFS: ${ipfsResult.error}`);
-    }
-    
-    const ipfsHash = ipfsResult.hash;
-    
-    // 3. Send the email via smart contract
+
+    // Get contract instance
     const contractResult = await getContract();
-    
     if (!contractResult.success) {
       throw new Error(`Failed to get contract instance: ${contractResult.error}`);
     }
-    
     const contract = contractResult.contract;
     
-    // For the contract call we use the recipient's Ethereum address
-    const tx = await contract.sendEmail(recipientAddress, ipfsHash);
+    // Get recipient's Ethereum address
+    let recipientAddress;
+    try {
+      // Try to get the address from the API
+      const response = await fetch(`/api/users/ethAddress?email=${encodeURIComponent(recipientEmail)}`);
+      if (response.ok) {
+        const data = await response.json();
+        recipientAddress = data.ethAddress;
+      } else {
+        throw new Error(`Failed to get recipient address for ${recipientEmail}`);
+      }
+    } catch (error) {
+      console.error('Error getting recipient address:', error);
+      throw new Error(`Could not find recipient address: ${error.message}`);
+    }
     
-    // 4. Wait for transaction to be mined
+    // Send email via smart contract
+    const tx = await contract.sendEmail(
+      recipientAddress,
+      ipfsResult.hash
+    );
+    
     const receipt = await tx.wait();
+    console.log('Transaction receipt:', receipt);
     
-    // 5. Extract email ID from event or use transaction hash as fallback
-    let emailId = null;
+    // Get emailId from the receipt
+    let emailId;
     
-    // Check if receipt has logs (events)
-    if (receipt.logs && receipt.logs.length > 0) {
       // Try to find the EmailSent event
-      const event = receipt.logs.find(log => {
-        // Check if this log is for the EmailSent event
-        // The first topic is the event signature hash
-        return log.topics && log.topics[0] === ethers.keccak256(ethers.toUtf8Bytes("EmailSent(address,uint256,string)"));
-      });
-      
-      if (event) {
-        // Decode the event data
-        const decodedEvent = contract.interface.parseLog(event);
-        emailId = decodedEvent.args.emailId.toString();
+    const emailSentEvent = receipt.logs.find(log => {
+      try {
+        const parsedLog = contract.interface.parseLog(log);
+        return parsedLog && parsedLog.name === 'EmailSent';
+      } catch (e) {
+        return false;
+      }
+    });
+    
+    if (emailSentEvent) {
+      try {
+        const parsedLog = contract.interface.parseLog(emailSentEvent);
+        emailId = parsedLog.args.emailId.toString();
+        console.log('Found emailId from EmailSent event:', emailId);
+      } catch (e) {
+        console.error('Error parsing EmailSent event:', e);
       }
     }
     
-    // If we couldn't find the event, use the transaction hash as a fallback
+    // If we couldn't get the emailId from the event, use a fallback
     if (!emailId) {
-      console.warn('Could not find EmailSent event in transaction receipt, using transaction hash as fallback');
-      emailId = receipt.hash;
+      // Fallback: Get the latest email ID for the recipient
+      console.log('No EmailSent event found, getting latest email ID for recipient');
+      const emailIds = await contract.getUserEmails(recipientAddress);
+      if (emailIds && emailIds.length > 0) {
+        // Get the latest email ID (assuming they're ordered by ID)
+        emailId = emailIds[emailIds.length - 1].toString();
+        console.log('Found emailId from getUserEmails:', emailId);
+      } else {
+        console.warn('No email IDs found for recipient');
+        emailId = 'unknown';
+      }
     }
     
-    return { success: true, emailId, ipfsHash, txHash: receipt.hash };
+    return {
+      success: true,
+      emailId,
+      transactionHash: receipt.transactionHash
+    };
   } catch (error) {
     console.error('Error sending email:', error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error.message
+    };
   }
 };
 
 // Save email as draft
 export const saveDraft = async (recipientEmail, emailContent) => {
   try {
-    // 0. Get recipient's public key and address
-    const recipientPublicKey = await getPublicKey(recipientEmail);
-    
-    if (!recipientPublicKey) {
-      throw new Error(`Recipient ${recipientEmail} public key not found`);
-    }
-    
     // Get recipient's Ethereum address from the API
     const response = await fetch(`/api/users/ethAddress?email=${encodeURIComponent(recipientEmail)}`);
     
@@ -114,11 +119,8 @@ export const saveDraft = async (recipientEmail, emailContent) => {
     
     const recipientAddress = data.ethAddress;
     
-    // 1. Encrypt the content with recipient's public key
-    const { encryptedContent, encryptionKey } = await encryptContent(emailContent, recipientPublicKey);
-    
-    // 2. Upload to IPFS
-    const ipfsResult = await uploadToIPFS(encryptedContent, encryptionKey);
+    // Upload content to IPFS
+    const ipfsResult = await uploadToIPFS(emailContent);
     
     if (!ipfsResult.success) {
       throw new Error(`Failed to upload to IPFS: ${ipfsResult.error}`);
@@ -126,7 +128,7 @@ export const saveDraft = async (recipientEmail, emailContent) => {
     
     const ipfsHash = ipfsResult.hash;
     
-    // 3. Save the draft via smart contract
+    // Save the draft via smart contract
     const contractResult = await getContract();
     
     if (!contractResult.success) {
@@ -134,39 +136,26 @@ export const saveDraft = async (recipientEmail, emailContent) => {
     }
     
     const contract = contractResult.contract;
-    const tx = await contract.saveAsDraft(recipientAddress, ipfsHash);
+    const tx = await contract.saveDraft(recipientAddress, ipfsHash);
     
-    // 4. Wait for transaction to be mined
+    // Wait for transaction to be mined
     const receipt = await tx.wait();
     
-    // 5. Extract email ID from event or use transaction hash as fallback
-    let emailId = null;
+    // Extract email ID from event
+    const event = receipt.events?.find(e => e.event === 'EmailSent');
+    const emailId = event ? event.args.emailId.toString() : null;
     
-    // Check if receipt has logs (events)
-    if (receipt.logs && receipt.logs.length > 0) {
-      // Try to find the DraftSaved event
-      const event = receipt.logs.find(log => {
-        // Check if this log is for the DraftSaved event
-        return log.topics && log.topics[0] === ethers.keccak256(ethers.toUtf8Bytes("DraftSaved(address,uint256,string)"));
-      });
-      
-      if (event) {
-        // Decode the event data
-        const decodedEvent = contract.interface.parseLog(event);
-        emailId = decodedEvent.args.emailId.toString();
-      }
-    }
-    
-    // If we couldn't find the event, use the transaction hash as a fallback
-    if (!emailId) {
-      console.warn('Could not find DraftSaved event in transaction receipt, using transaction hash as fallback');
-      emailId = receipt.hash;
-    }
-    
-    return { success: true, emailId, ipfsHash, txHash: receipt.hash };
+    return {
+      success: true,
+      emailId,
+      txHash: receipt.transactionHash
+    };
   } catch (error) {
     console.error('Error saving draft:', error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error.message
+    };
   }
 };
 
@@ -184,16 +173,9 @@ export const updateEmailStatus = async (emailId, isRead, isStarred, isDraft) => 
     // Convert emailId to BigInt
     const bigIntEmailId = typeof emailId === 'bigint' ? emailId : BigInt(emailId);
     
-    // Call the appropriate contract functions based on the status
-    if (isRead) {
-      const tx = await contract.markAsRead(bigIntEmailId);
+    // Call the contract function to update email status
+    const tx = await contract.updateEmailStatus(bigIntEmailId, isRead, isStarred, isDraft);
       await tx.wait();
-    }
-    
-    if (isStarred !== undefined) {
-      const tx = await contract.toggleStar(bigIntEmailId);
-      await tx.wait();
-    }
     
     return { success: true };
   } catch (error) {
@@ -251,9 +233,17 @@ export const getEmailDetails = async (emailId) => {
     const bigIntEmailId = typeof emailId === 'bigint' ? emailId : BigInt(emailId);
     
     // Get email details from contract
-    const emailDetails = await contract.getEmail(bigIntEmailId);
+    const [
+      sender,
+      recipient,
+      ipfsHash,
+      timestamp,
+      isRead,
+      isStarred,
+      isDraft
+    ] = await contract.getEmail(bigIntEmailId);
     
-    if (!emailDetails) {
+    if (!ipfsHash) {
       console.error('No email found for ID:', emailId);
       return { success: false, error: 'Email not found' };
     }
@@ -261,13 +251,13 @@ export const getEmailDetails = async (emailId) => {
     // Convert BigInt values to regular numbers/strings where needed
     const email = {
       id: Number(bigIntEmailId),
-      sender: emailDetails[0],
-      recipient: emailDetails[1],
-      ipfsHash: emailDetails[2],
-      timestamp: new Date(Number(emailDetails[3]) * 1000), // Convert BigInt to number for timestamp
-      isRead: emailDetails[4],
-      isStarred: emailDetails[5],
-      isDraft: emailDetails[6],
+      sender,
+      recipient,
+      ipfsHash,
+      timestamp: new Date(Number(timestamp) * 1000), // Convert BigInt to number for timestamp
+      isRead,
+      isStarred,
+      isDraft,
     };
     
     return { success: true, email };
@@ -277,174 +267,193 @@ export const getEmailDetails = async (emailId) => {
   }
 };
 
-// Get all emails for a user with their content
-export const getUserEmailsWithContent = async (userAddress) => {
+// Get user's emails with content
+export const getUserEmailsWithContent = async (userEmailOrAddress) => {
   try {
-    if (!userAddress) {
-      console.error('No user address provided');
-      return { success: false, error: 'User address is required' };
-    }
+    console.log('getUserEmailsWithContent called with:', userEmailOrAddress);
 
+    // Get contract instance
     const contractResult = await getContract();
-    
     if (!contractResult.success) {
       console.error('Failed to get contract instance:', contractResult.error);
-      return { success: false, error: 'Contract not available' };
+      throw new Error(`Failed to get contract instance: ${contractResult.error}`);
     }
-    
     const contract = contractResult.contract;
+    console.log('Contract instance obtained successfully');
     
-    // Get all email IDs for the user
-    const emailIds = await contract.getUserEmails(userAddress);
+    // Determine if we have an email or an address
+    let userAddress;
     
-    if (!emailIds || !Array.isArray(emailIds)) {
-      console.error('Invalid email IDs returned from contract');
-      return { success: false, error: 'Failed to get email IDs' };
+    // Check if it's an email (contains @) or an address (starts with 0x)
+    if (userEmailOrAddress.includes('@')) {
+      console.log('Input is an email, trying to get address from localStorage');
+      // It's an email, try to get the address from localStorage
+      userAddress = localStorage.getItem('bmail_user_address');
+      console.log('Address from localStorage:', userAddress);
+      
+      // If not in localStorage, try to get it from the API
+      if (!userAddress) {
+        console.log('Address not found in localStorage, trying API');
+        try {
+          const response = await fetch(`/api/users/ethAddress?email=${encodeURIComponent(userEmailOrAddress)}`);
+          if (response.ok) {
+            const data = await response.json();
+            userAddress = data.ethAddress;
+            console.log('Address from API:', userAddress);
+          } else {
+            console.warn('API request failed:', response.status);
+          }
+        } catch (error) {
+          console.warn('Failed to get address from API:', error);
+        }
+      }
+    } else {
+      // It's already an address
+      console.log('Input is already an address');
+      userAddress = userEmailOrAddress;
     }
     
-    // Convert BigInt values to regular numbers
-    const numericEmailIds = emailIds.map(id => Number(id));
+    // If we still don't have an address, try to get it from localStorage
+    if (!userAddress) {
+      console.log('Still no address, trying localStorage again');
+      userAddress = localStorage.getItem('bmail_user_address');
+      console.log('Address from localStorage (second attempt):', userAddress);
+    }
+    
+    if (!userAddress) {
+      console.error('No user address found after all attempts');
+      throw new Error('User address not found. Please reconnect your wallet.');
+    }
+    
+    console.log('Using address for getUserEmails:', userAddress);
+    
+    // Get email IDs for the user
+    console.log('Calling contract.getUserEmails...');
+    const emailIds = await contract.getUserEmails(userAddress);
+    console.log('Email IDs retrieved:', emailIds);
+    
+    // Sort email IDs in descending order (newest first)
+    const sortedEmailIds = emailIds.map(id => id.toString()).sort((a, b) => b - a);
+    console.log('Sorted email IDs:', sortedEmailIds);
     
     // Get details for each email
-    const emails = [];
-    for (const emailId of numericEmailIds) {
-      try {
-        // Get email details from blockchain
-        const { success, email, error } = await getEmailDetails(emailId);
-        
-        if (!success) {
-          console.warn(`Failed to get details for email ${emailId}:`, error);
-          continue;
+    console.log('Starting to fetch details for each email...');
+    const emails = await Promise.all(
+      sortedEmailIds.map(async (emailId) => {
+        try {
+          console.log('Fetching details for email ID:', emailId);
+          const [
+            sender,
+            recipient,
+            ipfsHash,
+            timestamp,
+            isRead,
+            isStarred,
+            isDraft
+          ] = await contract.getEmail(emailId);
+          console.log('Email details:', {
+            sender,
+            recipient,
+            ipfsHash,
+            timestamp,
+            isRead,
+            isStarred,
+            isDraft
+          });
+          
+          console.log('Fetching IPFS content for hash:', ipfsHash);
+          const ipfsContent = await getFromIPFS(ipfsHash);
+          console.log('IPFS content:', ipfsContent);
+          
+          // Return the plain content without decryption
+          return {
+            id: emailId,
+            from: sender,
+            to: recipient,
+            timestamp: timestamp.toString(),
+            content: ipfsContent.content,
+            isRead,
+            isStarred,
+            isDraft
+          };
+        } catch (error) {
+          console.warn(`Failed to fetch email ${emailId}:`, error);
+          return {
+            id: emailId,
+            error: 'Failed to fetch email content'
+          };
         }
-        
-        // Get content from IPFS
-        const { success: ipfsSuccess, data: encryptedContent, error: ipfsError } = await getFromIPFS(email.ipfsHash);
-        
-        if (!ipfsSuccess || !encryptedContent) {
-          console.warn(`Failed to get content from IPFS for email ${emailId}:`, ipfsError);
-          email.decryptedContent = null;
-          email.decryptionError = ipfsError || 'Failed to retrieve content from IPFS';
-          emails.push(email);
-          continue;
-        }
-        
-        // Decrypt the content
-        const { success: decryptSuccess, content: decryptedContent, error: decryptError } = await decryptEmailContent(encryptedContent);
-        
-        if (!decryptSuccess) {
-          console.warn(`Failed to decrypt content for email ${emailId}:`, decryptError);
-          email.decryptedContent = null;
-          email.decryptionError = decryptError || 'Failed to decrypt content';
-        } else {
-          email.decryptedContent = decryptedContent;
-          email.decryptionError = null;
-        }
-        
-        emails.push(email);
-      } catch (emailError) {
-        console.warn(`Error processing email ${emailId}:`, emailError);
-        // Continue with next email
-        continue;
-      }
-    }
+      })
+    );
     
-    return { success: true, emails };
+    console.log('All emails processed, returning results');
+    return {
+      success: true,
+      emails
+    };
   } catch (error) {
     console.error('Error getting user emails with content:', error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error.message
+    };
   }
 };
 
-// Decrypt email content using the user's private key
-async function decryptEmailContent(encryptedContentJSON) {
+// Get email details with content
+export const getEmailDetailsWithContent = async (emailId) => {
   try {
-    // Get user email from localStorage
-    const userEmail = localStorage.getItem('bmail_user_email');
-    if (!userEmail) {
-      throw new Error('User not authenticated');
+    // Get contract instance
+    const contractResult = await getContract();
+    if (!contractResult.success) {
+      throw new Error(`Failed to get contract instance: ${contractResult.error}`);
     }
-
-    // Get private key
-    const privateKey = await getPrivateKey(userEmail);
-    if (!privateKey) {
-      throw new Error('Private key not found');
+    const contract = contractResult.contract;
+    
+    // Get email details from contract
+    const [
+      sender,
+      recipient,
+      ipfsHash,
+      timestamp,
+      isRead,
+      isStarred,
+      isDraft
+    ] = await contract.getEmail(emailId);
+    
+    // Check if we have a valid IPFS hash
+    if (!ipfsHash) {
+      console.error('Unexpected email structure: missing IPFS hash');
+      throw new Error('Email data structure is not as expected');
     }
-
-    // Parse the encrypted content
-    let encryptedData;
-    try {
-      encryptedData = typeof encryptedContentJSON === 'string' 
-        ? JSON.parse(encryptedContentJSON)
-        : encryptedContentJSON;
-    } catch (error) {
-      throw new Error('Invalid encrypted content format');
+    
+    // Get content from IPFS
+    const ipfsContent = await getFromIPFS(ipfsHash);
+    
+    // Check if ipfsContent has the expected structure
+    if (!ipfsContent || !ipfsContent.content) {
+      console.error('Unexpected IPFS content structure:', ipfsContent);
+      throw new Error('IPFS content structure is not as expected');
     }
-
-    // Check which encryption format is used
-    if (encryptedData.encrypted && encryptedData.iv && encryptedData.authTag) {
-      // New format (AES-256-GCM)
-      const { decrypt } = await import('./encryption');
-      const decryptedContent = await decrypt(encryptedData, privateKey);
+    
       return {
         success: true,
-        content: decryptedContent
-      };
-    } else if (encryptedData.encryptedContent && encryptedData.encryptedKey) {
-      // Old format (RSA + AES hybrid)
-      const decryptedContent = await decryptWithPrivateKey(encryptedData, privateKey);
-      return {
-        success: true,
-        content: decryptedContent
-      };
-    } else {
-      throw new Error('Invalid encryption format');
-    }
+      email: {
+        id: emailId,
+        from: sender,
+        to: recipient,
+        timestamp: timestamp.toString(),
+        content: ipfsContent.content,
+        isRead,
+        isStarred,
+        isDraft
+      }
+    };
   } catch (error) {
-    console.error('Error decrypting email content:', error);
+    console.error('Error getting email details:', error);
     return {
       success: false,
-      error: error.message || 'Failed to decrypt email content'
+      error: error.message
     };
-  }
-}
-
-// Get details of a specific email with decrypted content
-export const getEmailDetailsWithDecryption = async (emailId) => {
-  try {
-    // 1. Get email details from blockchain
-    const { success, email, error } = await getEmailDetails(emailId);
-    
-    if (!success) {
-      throw new Error(error);
-    }
-    
-    // 2. Retrieve email content from IPFS
-    try {
-      const ipfsResult = await getFromIPFS(email.ipfsHash);
-      
-      if (!ipfsResult.success) {
-        throw new Error(ipfsResult.error || 'Failed to retrieve content from IPFS');
-      }
-      
-      // 3. Decrypt the content using the user's private key
-      const decryptionResult = await decryptEmailContent(ipfsResult.data);
-      
-      if (!decryptionResult.success) {
-        email.decryptedContent = null;
-        email.decryptionError = decryptionResult.error;
-      } else {
-        email.decryptedContent = decryptionResult.content;
-        email.decryptionError = null;
-      }
-    } catch (decryptionError) {
-      console.warn('Could not decrypt email content:', decryptionError);
-      email.decryptedContent = null;
-      email.decryptionError = decryptionError.message;
-    }
-    
-    return { success: true, email };
-  } catch (error) {
-    console.error('Error fetching email with decryption:', error);
-    return { success: false, error: error.message };
   }
 }; 

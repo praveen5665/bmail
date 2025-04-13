@@ -1,49 +1,24 @@
 import { Buffer } from 'buffer';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto-browserify';
+import forge from 'node-forge';
 
-// Generate a random encryption key
+// Generate a random AES key
 export const generateKey = () => {
   return randomBytes(32).toString('hex');
 };
 
-// Validate and convert key to proper format
+// Prepare key for encryption/decryption
 const prepareKey = (key) => {
-  if (!key) {
-    throw new Error('Encryption key is required');
-  }
-  
-  // If key is already a hex string of correct length, use it directly
-  if (typeof key === 'string' && /^[0-9a-f]{64}$/.test(key)) {
+  // If key is hex string, convert to buffer
+  if (typeof key === 'string' && key.length === 64) {
     return Buffer.from(key, 'hex');
   }
-  
-  // If key is a hex string but wrong length, pad or truncate
-  if (typeof key === 'string' && /^[0-9a-f]+$/.test(key)) {
-    const keyBuffer = Buffer.from(key, 'hex');
-    if (keyBuffer.length < 32) {
-      // Pad with zeros if too short
-      const paddedKey = Buffer.alloc(32);
-      keyBuffer.copy(paddedKey);
-      return paddedKey;
-    } else if (keyBuffer.length > 32) {
-      // Truncate if too long
-      return keyBuffer.slice(0, 32);
-    }
-    return keyBuffer;
+  // If key is already a buffer, use as is
+  if (Buffer.isBuffer(key)) {
+    return key;
   }
-  
-  // If key is not a hex string, hash it
-  const keyBuffer = Buffer.from(String(key));
-  if (keyBuffer.length < 32) {
-    // Pad with zeros if too short
-    const paddedKey = Buffer.alloc(32);
-    keyBuffer.copy(paddedKey);
-    return paddedKey;
-  } else if (keyBuffer.length > 32) {
-    // Truncate if too long
-    return keyBuffer.slice(0, 32);
-  }
-  return keyBuffer;
+  // Otherwise, use the key as is (for string keys)
+  return Buffer.from(key);
 };
 
 // Encrypt data using AES-256-GCM
@@ -70,9 +45,9 @@ export const encrypt = async (data, key) => {
     
     // Return encrypted data with IV and auth tag
     return {
-      encrypted,
+      data: encrypted,
       iv: iv.toString('hex'),
-      authTag: authTag.toString('hex')
+      key: key.toString('hex')
     };
   } catch (error) {
     console.error('Encryption error:', error);
@@ -112,5 +87,91 @@ export const decrypt = async (encryptedData, key) => {
   } catch (error) {
     console.error('Decryption error:', error);
     throw new Error('Failed to decrypt data');
+  }
+};
+
+// Hybrid encrypt (AES + RSA)
+export const hybridEncrypt = (data, publicKeyPem) => {
+  try {
+    // Generate a random AES key
+    const aesKey = forge.random.getBytesSync(32); // 256-bit key
+    
+    // Create AES cipher
+    const cipher = forge.cipher.createCipher('AES-CBC', aesKey);
+    
+    // Generate random IV
+    const iv = forge.random.getBytesSync(16);
+    cipher.start({iv: iv});
+    
+    // Add data and finish encryption
+    cipher.update(forge.util.createBuffer(data));
+    cipher.finish();
+    
+    // Get encrypted data
+    const encrypted = cipher.output.getBytes();
+    
+    // Convert public key from PEM
+    const publicKey = forge.pki.publicKeyFromPem(publicKeyPem);
+    
+    // Encrypt AES key with RSA
+    const encryptedKey = publicKey.encrypt(aesKey, 'RSAES-PKCS1-V1_5');
+    
+    // Return in the format expected by hybridDecrypt
+    return {
+      iv: forge.util.encode64(iv),
+      key: forge.util.encode64(encryptedKey),
+      data: forge.util.encode64(encrypted)
+    };
+  } catch (error) {
+    console.error('Hybrid encryption error:', error);
+    throw new Error(`Failed to encrypt data: ${error.message}`);
+  }
+};
+
+// Hybrid decrypt (AES + RSA)
+export const hybridDecrypt = (encryptedData, privateKeyPem) => {
+  try {
+    if (!encryptedData || !privateKeyPem) {
+      throw new Error('Missing required parameters for decryption');
+    }
+
+    // Ensure private key is in PEM format
+    let formattedPrivateKey = privateKeyPem;
+    if (!privateKeyPem.includes('-----BEGIN RSA PRIVATE KEY-----')) {
+      try {
+        const privateKey = forge.pki.privateKeyFromPem(privateKeyPem);
+        formattedPrivateKey = forge.pki.privateKeyToPem(privateKey);
+      } catch (error) {
+        console.error('Error formatting private key:', error);
+        throw new Error('Invalid private key format');
+      }
+    }
+
+    // Convert private key from PEM
+    const privateKey = forge.pki.privateKeyFromPem(formattedPrivateKey);
+
+    // Decode base64 data
+    const iv = forge.util.decode64(encryptedData.iv);
+    const encryptedKey = forge.util.decode64(encryptedData.key);
+    const encrypted = forge.util.decode64(encryptedData.data);
+
+    // Decrypt AES key with RSA
+    const aesKey = privateKey.decrypt(encryptedKey, 'RSAES-PKCS1-V1_5');
+
+    // Create decipher
+    const decipher = forge.cipher.createDecipher('AES-CBC', aesKey);
+    decipher.start({iv: iv});
+    decipher.update(forge.util.createBuffer(encrypted));
+    const pass = decipher.finish();
+
+    if (!pass) {
+      throw new Error('Decryption failed - invalid data or key');
+    }
+
+    // Return decrypted data
+    return decipher.output.toString();
+  } catch (error) {
+    console.error('Hybrid decryption error:', error);
+    throw new Error(`Failed to decrypt data: ${error.message}`);
   }
 }; 

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../contexts/AuthContext';
 import { getUserEmailsWithContent } from '../../utils/emailService';
+import EmailLayout from '../../components/EmailLayout';
 
 export default function Starred() {
   const router = useRouter();
@@ -11,6 +12,8 @@ export default function Starred() {
   const [emails, setEmails] = useState([]);
   const [loadingEmails, setLoadingEmails] = useState(true);
   const [error, setError] = useState(null);
+  const [filter, setFilter] = useState('all'); // all, unread
+  const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
     // Redirect if not authenticated
@@ -26,172 +29,233 @@ export default function Starred() {
     setError(null);
     
     try {
+      if (!user || !user.ethAddress) {
+        setError("No wallet address found. Please connect your wallet.");
+        setLoadingEmails(false);
+        return;
+      }
+      
       // Get user's emails from blockchain and IPFS
       const result = await getUserEmailsWithContent(user.ethAddress);
       
-      if (result.success) {
-        // Format emails for display - only show starred emails
-        const formattedEmails = result.emails
-          .filter(email => email.isStarred) // Only show starred emails
-          .map(email => {
-            // Try to extract subject and excerpt from decrypted content
-            let subject = 'No subject';
-            let excerpt = 'No content available';
-            
-            if (email.decryptedContent) {
-              if (typeof email.decryptedContent === 'object') {
-                subject = email.decryptedContent.subject || 'No subject';
-                excerpt = email.decryptedContent.body?.substring(0, 100) || 'No content';
-              } else if (typeof email.decryptedContent === 'string') {
-                // Try to parse as JSON
-                try {
-                  const content = JSON.parse(email.decryptedContent);
-                  subject = content.subject || 'No subject';
-                  excerpt = content.body?.substring(0, 100) || 'No content';
-                } catch {
-                  // If not JSON, use as plain text
-                  subject = 'Message';
-                  excerpt = email.decryptedContent.substring(0, 100);
-                }
-              }
-            }
-            
-            return {
-              id: email.id,
-              sender: email.sender,
-              recipient: email.recipient,
-              isSent: email.sender === user.ethAddress,
-              subject,
-              excerpt,
-              timestamp: new Date(email.timestamp), 
-              isRead: email.isRead,
-              isStarred: email.isStarred,
-              isDraft: email.isDraft
-            };
-          })
-          .sort((a, b) => b.timestamp - a.timestamp); // Sort by newest first
-          
-        setEmails(formattedEmails);
+      if (result.success && result.emails.length > 0) {
+        console.log('Emails found:', result.emails);
+        // Filter emails that are starred
+        const starredEmails = result.emails.filter(email => email.isStarred);
+        console.log('Filtered starred emails:', starredEmails);
+        setEmails(starredEmails);
       } else {
-        setError(result.error);
+        console.log('No emails found or error:', result);
+        setEmails([]);
       }
     } catch (err) {
       console.error('Error fetching emails:', err);
-      setError(err.message);
+      let errorMessage = 'Failed to load emails';
+      
+      if (err.message?.includes('contract')) {
+        errorMessage = 'Smart contract connection issue. Development mode is using mock data.';
+      } else if (err.message?.includes('network')) {
+        errorMessage = 'Network connection issue. Please check your internet connection.';
+      } else if (err.message?.includes('wallet')) {
+        errorMessage = 'Wallet connection issue. Please reconnect your wallet.';
+      }
+      
+      setError(errorMessage);
     } finally {
       setLoadingEmails(false);
     }
   };
 
+  const formatDate = (timestamp) => {
+    return new Date(Number(timestamp) * 1000).toLocaleString();
+  };
+
+  const filteredEmails = emails.filter(email => {
+    // Apply search filter
+    if (searchTerm) {
+      const searchLower = searchTerm.toLowerCase();
+      const subject = typeof email.content === 'object' 
+        ? (email.content.subject || '').toLowerCase() 
+        : '';
+      const content = typeof email.content === 'object' 
+        ? (email.content.content || '').toLowerCase() 
+        : (email.content || '').toLowerCase();
+      
+      if (!subject.includes(searchLower) && !content.includes(searchLower)) {
+        return false;
+      }
+    }
+    
+    // Apply category filter
+    if (filter === 'unread' && email.isRead) {
+      return false;
+    }
+    
+    return true;
+  });
+
   if (loading || !user) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="animate-spin h-10 w-10 border-4 border-blue-500 rounded-full border-t-transparent"></div>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  if (error) {
+  return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="bg-white p-6 rounded-lg shadow-md max-w-md w-full">
+          <div className="text-red-500 text-center">
+            <svg className="mx-auto h-12 w-12 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <h2 className="text-xl font-semibold mb-2">Error</h2>
+            <p>{error}</p>
+            <button 
+              onClick={() => router.push('/signin')}
+              className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+            >
+              Back to Sign In
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-blue-600">Bmail</h1>
-          <div className="flex items-center space-x-4">
-            <div className="text-sm text-gray-700">
-              {user.email}
+    <EmailLayout title="Starred" emailCount={filteredEmails.length} activeTab="starred">
+      {/* Search and Filter */}
+      <div className="px-6 py-3 border-b border-gray-200 bg-gray-50">
+        <div className="flex items-center space-x-2">
+          <div className="relative flex-1">
+            <input
+              type="text"
+              placeholder="Search starred emails..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            />
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
             </div>
-            <button 
-              onClick={signOut}
-              className="px-3 py-1 text-sm bg-gray-200 hover:bg-gray-300 rounded-md transition-colors"
-            >
-              Sign Out
-            </button>
           </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex space-x-6">
-          {/* Sidebar */}
-          <div className="w-64 bg-white rounded-lg shadow-sm p-4">
-            <button 
-              className="w-full bg-blue-600 text-white rounded-lg px-4 py-2 mb-6 font-medium"
-              onClick={() => router.push('/compose')}
-            >
-              Compose
-            </button>
-            <nav className="space-y-1">
-              <a href="/inbox" className="block px-3 py-2 text-gray-700 hover:bg-gray-50 rounded-md">
-                Inbox
-              </a>
-              <a href="/sent" className="block px-3 py-2 text-gray-700 hover:bg-gray-50 rounded-md">
-                Sent
-              </a>
-              <a href="/drafts" className="block px-3 py-2 text-gray-700 hover:bg-gray-50 rounded-md">
-                Drafts
-              </a>
-              <a href="/starred" className="block px-3 py-2 bg-blue-50 text-blue-700 rounded-md font-medium">
-                Starred
-              </a>
-            </nav>
-          </div>
-
-          {/* Email List */}
-          <div className="flex-1 bg-white rounded-lg shadow-sm overflow-hidden">
-            <div className="border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-              <h2 className="text-lg font-medium">Starred</h2>
-              <div className="text-sm text-gray-500">
-                {emails.length} message{emails.length !== 1 ? 's' : ''}
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="block w-40 pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
+          >
+            <option value="all">All</option>
+            <option value="unread">Unread</option>
+          </select>
               </div>
             </div>
 
+      {/* Email List */}
+      <div className="divide-y divide-gray-200">
             {loadingEmails ? (
-              <div className="p-8 text-center">
-                <div className="animate-spin h-8 w-8 border-4 border-blue-500 rounded-full border-t-transparent mx-auto"></div>
-                <p className="mt-2 text-gray-500">Loading starred messages...</p>
+          <div className="flex justify-center items-center h-64">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+          </div>
+        ) : filteredEmails.length === 0 ? (
+          <div className="text-center py-12">
+            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+            </svg>
+            <h3 className="mt-2 text-sm font-medium text-gray-900">No starred emails</h3>
+            <p className="mt-1 text-sm text-gray-500">Star important emails to find them quickly.</p>
+            <div className="mt-6">
+              <button
+                onClick={() => router.push('/inbox')}
+                className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              >
+                Go to Inbox
+              </button>
               </div>
-            ) : emails.length === 0 ? (
-              <div className="p-8 text-center">
-                <p className="text-gray-500">No starred messages found</p>
               </div>
             ) : (
               <ul className="divide-y divide-gray-200">
-                {emails.map((email) => (
-                  <li key={email.id} className="hover:bg-gray-50 transition-colors">
-                    <a 
-                      href={`/email/${email.id}`}
-                      className={`block px-6 py-4 ${!email.isRead ? 'font-semibold' : ''}`}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1 min-w-0">
-                          {email.isSent ? (
-                            <p className="text-sm truncate">To: {email.recipient}</p>
-                          ) : (
-                            <p className="text-sm truncate">From: {email.sender}</p>
-                          )}
-                          <p className={`text-md ${!email.isRead ? 'font-semibold' : ''}`}>
-                            <span className="text-yellow-400 mr-1">★</span>
-                            {email.isDraft && (
-                              <span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-0.5 rounded mr-2">Draft</span>
-                            )}
-                            {email.subject}
-                          </p>
-                          <p className="text-sm text-gray-500 truncate">{email.excerpt}</p>
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {email.timestamp.toLocaleDateString()}
-                        </div>
+            {filteredEmails.map((email, index) => (
+              <li 
+                key={`${email.id}-${index}`} 
+                className="hover:bg-gray-50 transition-colors"
+              >
+                <div className="px-6 py-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3 flex-1 min-w-0">
+                      <div className="flex-shrink-0">
+                        <svg className="h-5 w-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                        </svg>
                       </div>
-                    </a>
+                      <div 
+                        className="flex-1 min-w-0 cursor-pointer"
+                        onClick={() => router.push(`/email/${email.id}`)}
+                      >
+                        <div className="flex items-center">
+                          <p className={`text-sm font-medium ${!email.isRead ? 'text-gray-900 font-semibold' : 'text-gray-500'}`}>
+                            {email.from && email.from.toLowerCase() === user.ethAddress.toLowerCase() 
+                              ? `To: ${email.to || 'Unknown'}`
+                              : `From: ${email.from || 'Unknown'}`}
+                          </p>
+                          {!email.isRead && (
+                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-800">
+                              New
+                            </span>
+                          )}
+                            {email.isDraft && (
+                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                              Draft
+                            </span>
+                            )}
+                        </div>
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {typeof email.content === 'object' ? email.content.subject : 'Message'}
+                        </p>
+                        <p className="mt-1 text-sm text-gray-500 line-clamp-2">
+                          {typeof email.content === 'object' 
+                            ? (email.content.content || email.content.body || 'No content')
+                            : (typeof email.content === 'string' ? email.content : 'No content')}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="ml-4 flex-shrink-0 flex items-center space-x-2">
+                      <p className="text-sm text-gray-500">
+                        {formatDate(email.timestamp)}
+                      </p>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // TODO: Implement unstar functionality
+                        }}
+                        className="p-1 text-yellow-400 hover:text-yellow-500 focus:outline-none"
+                      >
+                        <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // TODO: Implement delete functionality
+                        }}
+                        className="p-1 text-gray-400 hover:text-red-500 focus:outline-none"
+                      >
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
                   </li>
                 ))}
               </ul>
             )}
           </div>
-        </div>
-      </div>
-    </div>
+    </EmailLayout>
   );
 } 

@@ -1,56 +1,25 @@
 import { Buffer } from 'buffer';
-import { encrypt, generateKey } from './encryption';
-
-// Pinata IPFS configuration
-const PINATA_API_KEY = process.env.NEXT_PUBLIC_PINATA_API_KEY;
-const PINATA_SECRET_KEY = process.env.NEXT_PUBLIC_PINATA_SECRET_KEY;
-const PINATA_JWT = process.env.NEXT_PUBLIC_PINATA_JWT;
-
-// Encrypt content for IPFS storage
-export const encryptContent = async (content, recipientPublicKey) => {
-  try {
-    // Generate a random encryption key for AES-256-GCM
-    const encryptionKey = generateKey();
-    
-    // Encrypt the content with AES-256-GCM
-    const encryptedContent = await encrypt(content, encryptionKey);
-    
-    // Encrypt the AES key with the recipient's public key
-    const encryptedKey = encryptMessage(encryptionKey, recipientPublicKey);
-    
-    // Return the encrypted content and key
-    return {
-      encryptedContent,
-      encryptionKey: encryptedKey
-    };
-  } catch (error) {
-    console.error('Error encrypting content:', error);
-    throw new Error('Failed to encrypt content');
-  }
-};
 
 // Upload content to IPFS using Pinata API
-export const uploadToIPFS = async (content, encryptionKey) => {
+export const uploadToIPFS = async (data) => {
   try {
-    // Convert content to JSON string if it's an object
-    const contentString = typeof content === 'object' ? JSON.stringify(content) : content;
+    console.log('Uploading content to IPFS:', data);
     
-    // Create a FormData object to send the file
+    // Convert data to string if it's an object
+    const content = typeof data === 'object' ? JSON.stringify(data) : data;
+    
+    // Create form data
     const formData = new FormData();
-    const file = new Blob([contentString], { type: 'application/json' });
-    formData.append('file', file, 'email-content.json');
-    
-    // Set options for pinning
-    const options = {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${PINATA_JWT}`,
-      },
-      body: formData
-    };
+    formData.append('file', new Blob([content], { type: 'application/json' }));
     
     // Upload to Pinata
-    const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', options);
+    const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.NEXT_PUBLIC_PINATA_JWT}`
+      },
+      body: formData
+    });
     
     if (!response.ok) {
       const errorData = await response.json();
@@ -58,16 +27,17 @@ export const uploadToIPFS = async (content, encryptionKey) => {
     }
     
     const result = await response.json();
+    console.log('IPFS upload result:', result);
     
-    return { 
-      success: true, 
-      hash: result.IpfsHash 
+    return {
+      success: true,
+      hash: result.IpfsHash
     };
   } catch (error) {
     console.error('Error uploading to IPFS:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Failed to upload to IPFS' 
+    return {
+      success: false,
+      error: error.message
     };
   }
 };
@@ -75,23 +45,31 @@ export const uploadToIPFS = async (content, encryptionKey) => {
 // Get content from IPFS using Pinata gateway
 export const getFromIPFS = async (hash) => {
   try {
-    // Use Pinata gateway to retrieve content
+    console.log('Getting content from IPFS with hash:', hash);
+    
+    // Get from Pinata gateway
     const response = await fetch(`https://gateway.pinata.cloud/ipfs/${hash}`);
     
     if (!response.ok) {
-      throw new Error(`Failed to fetch from IPFS: ${response.statusText}`);
+      throw new Error(`Failed to retrieve from IPFS: ${response.statusText}`);
     }
     
-    const data = await response.json();
-    return { 
-      success: true, 
-      data 
-    };
+    const data = await response.text();
+    
+    // Try to parse as JSON
+    let parsedData;
+    try {
+      parsedData = JSON.parse(data);
+      console.log('Successfully parsed IPFS data as JSON');
+    } catch {
+      console.log('IPFS data is not JSON, returning as string');
+      return { content: data };
+    }
+    
+    // Return the parsed data
+    return { content: parsedData };
   } catch (error) {
     console.error('Error retrieving from IPFS:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Failed to retrieve from IPFS' 
-    };
+    throw new Error('Failed to retrieve from IPFS');
   }
 }; 

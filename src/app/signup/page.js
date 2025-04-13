@@ -45,11 +45,10 @@ export default function SignUp() {
     e.preventDefault();
     setLoading(true);
     setError('');
-    setSuccess('');
     
     try {
       // Validate form
-      if (!formData.name || !formData.username || !formData.password) {
+      if (!formData.name || !formData.username || !formData.password || !formData.confirmPassword) {
         throw new Error('All fields are required');
       }
       
@@ -57,12 +56,19 @@ export default function SignUp() {
         throw new Error('Passwords do not match');
       }
       
+      // Check if wallet is connected
       if (!walletAddress) {
-        throw new Error('Please connect your wallet');
+        throw new Error('Please connect your wallet before signing up');
       }
       
       // Create email with @bmail.com
       const email = `${formData.username}@bmail.com`;
+      
+      // Check if password is strong enough
+      if (formData.password.length < 8) {
+        throw new Error('Password must be at least 8 characters long');
+      }
+      
       console.log('Creating account for email:', email);
       
       // Generate RSA key pair
@@ -70,49 +76,60 @@ export default function SignUp() {
       const { privateKey, publicKey } = await generateKeyPair();
       console.log('Key pair generated successfully');
       
-      // Store private key in client's browser
+      // Store private key
       console.log('Storing private key...');
       try {
         await storePrivateKey(email, privateKey);
         console.log('Private key stored successfully');
-        
-        // Verify the key was stored
-        try {
-          const retrievedKey = await getPrivateKey(email);
-          console.log('Verified private key storage - key length:', retrievedKey.length);
-        } catch (verifyError) {
-          console.error('Failed to verify key storage:', verifyError);
-          throw new Error('Failed to verify private key storage. Please try a different browser or clear your browser cache.');
-        }
-      } catch (keyStoreError) {
-        console.error('Error storing private key:', keyStoreError);
-        throw new Error('Failed to securely store your encryption key: ' + keyStoreError.message);
+      } catch (keyError) {
+        console.error('Error storing private key:', keyError);
+        throw new Error('Failed to store private key');
       }
       
-      // Sign up user with MongoDB through our API
-      console.log('Signing up user...');
-      const { success, data, error: signUpError } = await signUp({
+      // Create user account
+      console.log('Sending registration request with data:', {
         email,
         password: formData.password,
-        walletAddress,
         name: formData.name,
+        ethAddress: walletAddress,
         publicKey
       });
       
-      if (!success) {
-        throw new Error(signUpError || 'Failed to create account');
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          password: formData.password,
+          name: formData.name,
+          ethAddress: walletAddress,
+          publicKey: publicKey.toString()
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create account');
       }
       
-      console.log('User signed up successfully:', data.user.id);
-      setSuccess('Account created successfully!');
+      // Store user info in localStorage
+      localStorage.setItem('bmail_user_email', email);
+      localStorage.setItem('bmail_user_id', data.user.id);
+      localStorage.setItem('bmail_token', data.token);
       
-      // Redirect to sign in after successful signup
+      // Show success message
+      setSuccess('Account created successfully! Redirecting to login...');
+      
+      // Redirect to login page after a short delay
       setTimeout(() => {
-        router.push('/signin');
-      }, 3000);
-      
+        router.push('/signin?registered=true');
+      }, 2000);
     } catch (err) {
-      setError(err.message);
+      console.error('Signup error:', err);
+      setError(err.message || 'An error occurred during signup');
     } finally {
       setLoading(false);
     }

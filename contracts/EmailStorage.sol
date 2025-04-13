@@ -5,7 +5,7 @@ contract EmailStorage {
     struct Email {
         address sender;
         address recipient;
-        string ipfsHash;      // Hash of encrypted content stored on Pinata
+        string ipfsHash;      // Hash of content stored on Pinata
         uint256 timestamp;
         bool isRead;
         bool isStarred;
