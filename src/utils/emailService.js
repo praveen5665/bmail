@@ -1,6 +1,7 @@
-import { getContract } from './web3Config';
+import { getEmailStorageContract } from './web3Config';
 import { uploadToIPFS, getFromIPFS } from './ipfsService';
 import { ethers } from 'ethers';
+import { isValidStaker } from './stakingService';
 
 // Send email
 export const sendEmail = async (recipientEmail, subject, content) => {
@@ -17,7 +18,7 @@ export const sendEmail = async (recipientEmail, subject, content) => {
     }
 
     // Get contract instance
-    const contractResult = await getContract();
+    const contractResult = await getEmailStorageContract();
     if (!contractResult.success) {
       throw new Error(`Failed to get contract instance: ${contractResult.error}`);
     }
@@ -129,7 +130,7 @@ export const saveDraft = async (recipientEmail, emailContent) => {
     const ipfsHash = ipfsResult.hash;
     
     // Save the draft via smart contract
-    const contractResult = await getContract();
+    const contractResult = await getEmailStorageContract();
     
     if (!contractResult.success) {
       throw new Error(`Failed to get contract instance: ${contractResult.error}`);
@@ -162,7 +163,7 @@ export const saveDraft = async (recipientEmail, emailContent) => {
 // Update email status (read, starred, draft)
 export const updateEmailStatus = async (emailId, isRead, isStarred, isDraft) => {
   try {
-    const contractResult = await getContract();
+    const contractResult = await getEmailStorageContract();
     
     if (!contractResult.success) {
       throw new Error(`Failed to get contract instance: ${contractResult.error}`);
@@ -187,7 +188,7 @@ export const updateEmailStatus = async (emailId, isRead, isStarred, isDraft) => 
 // Get all emails for a user
 export const getUserEmails = async (userAddress) => {
   try {
-    const contractResult = await getContract();
+    const contractResult = await getEmailStorageContract();
     
     if (!contractResult.success) {
       throw new Error(`Failed to get contract instance: ${contractResult.error}`);
@@ -214,7 +215,7 @@ export const getEmailDetails = async (emailId) => {
       return { success: false, error: 'Email ID is required' };
     }
     
-    const contractResult = await getContract();
+    const contractResult = await getEmailStorageContract();
     
     if (!contractResult.success) {
       console.error('Failed to get contract instance:', contractResult.error);
@@ -273,7 +274,7 @@ export const getUserEmailsWithContent = async (userEmailOrAddress) => {
     console.log('getUserEmailsWithContent called with:', userEmailOrAddress);
 
     // Get contract instance
-    const contractResult = await getContract();
+    const contractResult = await getEmailStorageContract();
     if (!contractResult.success) {
       console.error('Failed to get contract instance:', contractResult.error);
       throw new Error(`Failed to get contract instance: ${contractResult.error}`);
@@ -404,7 +405,7 @@ export const getUserEmailsWithContent = async (userEmailOrAddress) => {
 export const getEmailDetailsWithContent = async (emailId) => {
   try {
     // Get contract instance
-    const contractResult = await getContract();
+    const contractResult = await getEmailStorageContract();
     if (!contractResult.success) {
       throw new Error(`Failed to get contract instance: ${contractResult.error}`);
     }

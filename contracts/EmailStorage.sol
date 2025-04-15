@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import "./StakingContract.sol";
+
 contract EmailStorage {
     struct Email {
         address sender;
@@ -15,7 +17,14 @@ contract EmailStorage {
     mapping(uint256 => Email) public emails;
     mapping(address => uint256[]) public userEmails;  // Maps user address to their email IDs
     uint256 public emailCount;
-
+    
+    // Reference to the staking contract
+    StakingContract public stakingContract;
+    
+    // Minimum stake required to send emails
+    uint256 public minStakeToSendEmail;
+    
+    // Events
     event EmailSent(
         uint256 indexed emailId,
         address indexed sender,
@@ -30,10 +39,44 @@ contract EmailStorage {
         bool isStarred,
         bool isDraft
     );
+    
+    event StakingContractUpdated(address indexed newStakingContract);
+    event MinStakeUpdated(uint256 newMinStake);
+
+    constructor(address payable _stakingContractAddress, uint256 _minStakeToSendEmail) {
+        stakingContract = StakingContract(_stakingContractAddress);
+        minStakeToSendEmail = _minStakeToSendEmail;
+    }
+    
+    /**
+     * @dev Update the staking contract address
+     */
+    function updateStakingContract(address payable _newStakingContractAddress) external {
+        // In a real implementation, this would be restricted to the owner
+        stakingContract = StakingContract(_newStakingContractAddress);
+        emit StakingContractUpdated(_newStakingContractAddress);
+    }
+    
+    /**
+     * @dev Update the minimum stake required to send emails
+     */
+    function updateMinStakeToSendEmail(uint256 _newMinStake) external {
+        // In a real implementation, this would be restricted to the owner
+        minStakeToSendEmail = _newMinStake;
+        emit MinStakeUpdated(_newMinStake);
+    }
 
     function sendEmail(address _recipient, string memory _ipfsHash) public returns (uint256) {
         require(_recipient != address(0), "Invalid recipient address");
         require(bytes(_ipfsHash).length > 0, "Invalid IPFS hash");
+        
+        // Check if the sender has staked enough
+        (uint256 amount, , , , , ) = stakingContract.getStakeDetails(msg.sender);
+        require(
+            stakingContract.isValidStaker(msg.sender) && 
+            amount >= minStakeToSendEmail,
+            "Insufficient stake to send email"
+        );
 
         uint256 emailId = emailCount++;
         
@@ -55,6 +98,14 @@ contract EmailStorage {
     }
 
     function saveDraft(address _recipient, string memory _ipfsHash) public returns (uint256) {
+        // Check if the sender has staked enough
+        (uint256 amount, , , , , ) = stakingContract.getStakeDetails(msg.sender);
+        require(
+            stakingContract.isValidStaker(msg.sender) && 
+            amount >= minStakeToSendEmail,
+            "Insufficient stake to save draft"
+        );
+        
         uint256 emailId = emailCount++;
         
         emails[emailId] = Email({

@@ -84,6 +84,16 @@ export default function EmailLayout({ children, title, emailCount, activeTab }) 
               >
                 Drafts
               </Link>
+              <Link 
+                href="/staking" 
+                className={`px-3 py-2 text-sm font-medium border-b-2 ${
+                  activeTab === 'staking' 
+                    ? 'text-indigo-600 border-indigo-600' 
+                    : 'text-gray-500 hover:text-gray-700 hover:border-gray-300 border-transparent'
+                }`}
+              >
+                Staking
+              </Link>
             </div>
           </div>
 
